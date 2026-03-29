@@ -125,6 +125,11 @@ class FinSaarthiState(TypedDict, total=False):
     uploaded_file_path: Optional[str]
     module_selected: str  # "portfolio" | "fire" | "tax" | "couple"
 
+    # ── Orchestrator Routing ──────────────────────────────────────────────
+    intent: str  # resolved intent after classification
+    needs_more_input: bool  # True if required fields are missing
+    missing_fields: List[str]  # list of field names the UI must collect
+
     # ── Module-Specific Data ──────────────────────────────────────────────
     portfolio_data: PortfolioData
     fire_data: FIREData
@@ -143,3 +148,137 @@ class FinSaarthiState(TypedDict, total=False):
     session_id: str
     created_at: str
     last_updated_at: str
+
+
+# ==============================================================================
+# FACTORY FUNCTION
+# ==============================================================================
+
+def create_initial_state(
+    module: str,
+    session_id: Optional[str] = None,
+) -> FinSaarthiState:
+    """
+    Create a clean initial state for a given module.
+
+    Parameters:
+        module (str): One of "portfolio", "fire", "tax", "couple".
+        session_id (str, optional): Unique session ID. Generated if not provided.
+
+    Returns:
+        FinSaarthiState: A fresh state dict ready for the LangGraph pipeline.
+    """
+    import uuid
+
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+    return FinSaarthiState(
+        user_profile={},
+        uploaded_file_path=None,
+        module_selected=module,
+        intent="",
+        needs_more_input=False,
+        missing_fields=[],
+        portfolio_data={},
+        fire_data={},
+        tax_data={},
+        couple_data={},
+        agent_results={},
+        final_response="",
+        audit_log=[],
+        error_message="",
+        session_id=session_id or str(uuid.uuid4()),
+        created_at=now,
+        last_updated_at=now,
+    )
+
+
+# ==============================================================================
+# VALIDATION
+# ==============================================================================
+
+def validate_state_for_module(state: FinSaarthiState) -> tuple:
+    """
+    Check all required fields are present for the selected module.
+
+    Parameters:
+        state (FinSaarthiState): Current state.
+
+    Returns:
+        tuple[bool, list[str]]: (is_valid, list_of_missing_fields)
+    """
+    module = state.get("module_selected", "")
+    missing: List[str] = []
+    profile = state.get("user_profile", {})
+
+    if module == "portfolio":
+        if not state.get("uploaded_file_path"):
+            missing.append("uploaded_file_path")
+        if not profile.get("risk_tolerance"):
+            missing.append("user_profile.risk_tolerance")
+
+    elif module == "fire":
+        fd = state.get("fire_data", {})
+        for field in ("current_age", "monthly_income", "monthly_expenses"):
+            if not fd.get(field) and not profile.get("age" if field == "current_age" else field.replace("monthly_", "")):
+                missing.append(f"fire_data.{field}")
+        goals = fd.get("goal_breakdown", [])
+        if not goals:
+            missing.append("fire_data.goals (empty)")
+
+    elif module == "tax":
+        has_pdf = bool(state.get("uploaded_file_path"))
+        td = state.get("tax_data", {})
+        has_manual = bool(td.get("parsed_income", {}).get("gross_salary") or profile.get("annual_income"))
+        if not has_pdf and not has_manual:
+            missing.append("uploaded_file_path OR tax_data.gross_salary")
+
+    elif module == "couple":
+        cd = state.get("couple_data", {})
+        if not cd.get("partner_a_profile", {}).get("gross_salary"):
+            missing.append("couple_data.partner_a_profile.gross_salary")
+        if not cd.get("partner_b_profile", {}).get("gross_salary"):
+            missing.append("couple_data.partner_b_profile.gross_salary")
+        if not cd.get("joint_goals"):
+            missing.append("couple_data.joint_goals")
+
+    return (len(missing) == 0, missing)
+
+
+# ==============================================================================
+# AUDIT HELPER
+# ==============================================================================
+
+def add_audit_entry(
+    state: FinSaarthiState,
+    agent: str,
+    action: str,
+    summary: str,
+) -> FinSaarthiState:
+    """
+    Append a timestamped audit entry to state and return updated state.
+
+    Parameters:
+        state: Current state.
+        agent (str): Agent name.
+        action (str): Action performed.
+        summary (str): Human-readable summary.
+
+    Returns:
+        FinSaarthiState: State with new audit entry appended.
+    """
+    entry: AuditEntry = {
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "agent_name": agent,
+        "action": action,
+        "input_summary": "",
+        "output_summary": summary,
+        "tools_called": [],
+        "duration_ms": 0,
+    }
+
+    audit_log = list(state.get("audit_log", []))
+    audit_log.append(entry)
+
+    return {**state, "audit_log": audit_log, "last_updated_at": entry["timestamp"]}
+
