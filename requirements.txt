@@ -40,3 +40,20 @@ uvicorn[standard]==0.34.0
 # ---------- Utilities ----------
 python-dotenv==1.0.1
 pydantic==2.10.4
+
+langchain
+langgraph
+langchain-google-genai
+chromadb
+sentence-transformers
+pdfplumber
+pypdf2
+numpy-financial
+pandas
+numpy
+plotly
+streamlit
+fastapi
+uvicorn
+python-dotenv
+pytest
